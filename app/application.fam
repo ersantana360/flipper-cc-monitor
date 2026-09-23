@@ -1,0 +1,13 @@
+App(
+    appid="cc_monitor",
+    name="Claude Code Monitor",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="cc_monitor_app",
+    requires=["gui", "storage", "notification"],
+    stack_size=4 * 1024,
+    fap_category="GPIO",
+    fap_version="1.0",
+    fap_icon="icon.png",
+    fap_description="Watch and gate Claude Code sessions from the Flipper (via FlipperHTTP)",
+    fap_author="ersantana",
+)

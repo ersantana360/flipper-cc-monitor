@@ -1,0 +1,17 @@
+# build outputs
+app/dist/
+app/.vscode/
+__pycache__/
+*.pyc
+
+# generated protobuf stubs (tools/gen_pb.sh) and screenshots
+tools/pb/
+tools/*.png
+
+# third-party prebuilt apps that are not redistributable here (see README "Third-party")
+firmware/esp_flasher.fap
+firmware/flipper_http.fap
+
+# local WiFi credentials, if you keep a copy here
+wifi.txt
+tools/flipperzero-protobuf/
