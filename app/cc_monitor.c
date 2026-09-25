@@ -13,8 +13,9 @@
 #define CONFIG_PATH CONFIG_DIR "/bridge.txt"
 #define WIFI_PATH CONFIG_DIR "/wifi.txt"   // optional: line 1 = SSID, line 2 = password
 #define DEFAULT_BRIDGE "http://192.168.0.9:8730"
-#define POLL_MS 1000
-#define REQUEST_TIMEOUT_MS 4000
+#define POLL_MS 1500          // retry interval while offline
+#define WAIT_MS 1500          // long-poll hold asked from the bridge/relay
+#define REQUEST_TIMEOUT_MS 7000  // covers WAIT_MS + a TLS handshake
 
 typedef enum {
     ConnBoot,     // starting up
@@ -36,6 +37,7 @@ typedef struct {
     NotificationApp* notif;
 
     char bridge[96];
+    char token[48];       // optional, line 2 of bridge.txt (needed by the cloud relay)
     char status[24];
     char detail[80];
     char ask_id[12];
@@ -69,7 +71,7 @@ static void load_bridge_url(App* app) {
     storage_simply_mkdir(storage, CONFIG_DIR);
     File* f = storage_file_alloc(storage);
     if(storage_file_open(f, CONFIG_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        char buf[96] = {0};
+        char buf[160] = {0};
         size_t n = storage_file_read(f, buf, sizeof(buf) - 1);
         buf[n] = 0;
         // first line, trimmed
@@ -79,6 +81,13 @@ static void load_bridge_url(App* app) {
         char* s = buf;
         while(*s == ' ') s++;
         if(strlen(s) > 7) strncpy(app->bridge, s, sizeof(app->bridge) - 1);
+        // optional second line: shared token
+        char* t = e + 1;
+        while(*t == '\r' || *t == '\n' || *t == ' ') t++;
+        char* te = t;
+        while(*te && *te != '\r' && *te != '\n' && *te != ' ') te++;
+        *te = 0;
+        if(t < buf + n && *t) strncpy(app->token, t, sizeof(app->token) - 1);
     } else {
         storage_file_close(f);
         if(storage_file_open(f, CONFIG_PATH, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
@@ -161,8 +170,8 @@ static bool board_ping(App* app) {
 }
 
 static void poll_state(App* app) {
-    char url[160];
-    snprintf(url, sizeof(url), "%s/state?client=flipper", app->bridge);
+    char url[256];
+    snprintf(url, sizeof(url), "%s/state?client=flipper&wait=%d&token=%s", app->bridge, WAIT_MS, app->token);
     bool ok = http_do(app, GET, url, NULL);
     char status[24] = {0}, detail[80] = {0}, pend[4] = {0}, ask[12] = {0};
     if(ok) {
@@ -195,14 +204,14 @@ static void poll_state(App* app) {
 }
 
 static void send_decision(App* app) {
-    char url[160], answer[8];
+    char url[256], answer[8];
     furi_mutex_acquire(app->mutex, FuriWaitForever);
     strncpy(answer, app->decision, sizeof(answer) - 1);
     answer[sizeof(answer) - 1] = 0;
     app->decision[0] = 0;
     furi_mutex_release(app->mutex);
     if(!answer[0]) return;
-    snprintf(url, sizeof(url), "%s/decision?answer=%s", app->bridge, answer);
+    snprintf(url, sizeof(url), "%s/decision?answer=%s&ask=%s&token=%s", app->bridge, answer, app->ask_id, app->token);
     bool ok = http_do(app, GET, url, NULL);
     FURI_LOG_I(TAG, "decision %s -> %s", answer, ok ? "ok" : "failed");
     furi_mutex_acquire(app->mutex, FuriWaitForever);
@@ -237,7 +246,8 @@ static int32_t worker(void* ctx) {
     }
     uint32_t reconnect_tries = 0;
     while(true) {
-        uint32_t flags = furi_thread_flags_wait(EvtStop | EvtDecision, FuriFlagWaitAny, POLL_MS);
+        uint32_t pace = (app->conn == ConnOnline) ? 30 : POLL_MS;
+        uint32_t flags = furi_thread_flags_wait(EvtStop | EvtDecision, FuriFlagWaitAny, pace);
         if(flags & EvtStop) break;
         if(!board) {
             if(board_ping(app)) {   // board plugged in later

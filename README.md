@@ -16,20 +16,34 @@ Claude Code hooks ──> bridge (WSL, :8730) <── polls ── WiFi dev boar
 - `app/` – the Flipper app (`ufbt` project, FlipperHTTP C library vendored in `app/flipper_http/`). Build with `cd app && ufbt` (SDK pinned to firmware 1.4.3 / API 87.1).
 - `firmware/` – FlipperHTTP v2.2.0 binaries for the WiFi dev board (ESP32-S2). The ESP Flasher and FlipperHTTP companion FAPs are downloaded separately (see *Third-party*).
 - `tools/` – Windows-side serial tools (upload files, screenshots, remote key presses) and the port-forward script.
+- `cloud/` – optional Cloudflare Worker relay (free plan) that removes the need for any inbound port; see `cloud/README.md`.
 
 ## Bridge API
 | Route | Who | What |
 |---|---|---|
-| `GET /state?client=flipper` | Flipper app, ~1/s | `{"status","detail","pending","ask"}` |
+| `GET /state?client=flipper[&wait=ms]` | Flipper app | `{"status","detail","pending","ask","v"}`; `wait` long-polls up to 3 s until something changes |
 | `POST /state` `{"status","detail"}` | hooks | update the screen |
 | `POST /ask` `{"tool","detail"}` | PreToolUse hook | blocks until `allow`/`deny`; `deny` after 90 s; `passthrough` immediately when no Flipper has polled in the last 6 s |
 | `GET /decision?answer=allow\|deny` or `POST /decision` | Flipper (or curl) | answers the pending ask |
 | `GET /health` | you | debugging |
 
-Env knobs for `main.py`: `CC_BRIDGE_PORT`, `CC_ASK_TIMEOUT` (90), `CC_FLIPPER_STALE` (6), `CC_GATE_STRICT=1` (deny instead of passthrough when the Flipper is absent).
+Env knobs for `main.py`: `CC_BRIDGE_PORT`, `CC_ASK_TIMEOUT` (90), `CC_FLIPPER_STALE` (6), `CC_GATE_STRICT=1` (deny instead of passthrough when the Flipper is absent), `CC_CLOUD_URL` + `CC_CLOUD_TOKEN` (mirror state to the cloud relay and collect decisions from it).
 
 **Fail-open by design:** if the bridge is down or the Flipper app is not running, `cc-ask.sh` exits 0 and Claude Code behaves normally.
 Close the app on the Flipper (hold BACK) to switch the gate off; open it to switch it on.
+
+## USB alerts (optional, off by default)
+With `CC_USB_ALERTS=1 bridge/start.sh`, and the Flipper plugged into the PC by USB, the bridge also buzzes and lights it through the serial CLI
+(`tools/flip_alert.py`, run with the Windows Python from WSL):
+
+| Event | Alert |
+|---|---|
+| decision pending (`/ask`) | double vibration, red LED stays on until answered |
+| allowed / denied | green blink / red double blink |
+| Claude needs you (Notification hook) | one vibration, blue LED until the session works again |
+| session finished (Stop hook) | green blink |
+
+The alert is skipped silently when the port is busy (qFlipper, lab.flipper.net, the serial tools).
 
 ## Flipper app
 Apps → GPIO → **Claude Code Monitor**. The header shows the link state (`NO BOARD` / `no bridge` / `online`), the body shows the
@@ -37,11 +51,14 @@ status word plus the tool/command, and a black bar `OK = ALLOW  BACK = DENY` app
 Hold BACK to exit.
 
 Config files on the SD card (`apps_data/cc_monitor/`):
-- `bridge.txt` – bridge URL, created on first run with `http://192.168.0.9:8730`. Edit if the PC's LAN IP changes.
+- `bridge.txt` – line 1: bridge URL (created on first run with `http://192.168.0.9:8730`; edit if the PC's LAN IP changes, or point it at the cloud relay), line 2 (optional): the relay token.
 - `wifi.txt` – optional, line 1 = SSID, line 2 = password (2.4 GHz network). Pushed to the board with `[WIFI/SAVE]` every time the app starts.
   Alternative: set the credentials once with the **FlipperHTTP** companion app (Apps → GPIO → FlipperHTTP).
 
-## Networking on WSL2
+## Networking: two ways for the board to reach the bridge
+**Option A, cloud relay (no admin, works from anywhere).** Deploy `cloud/` to Cloudflare Workers (free plan), start the bridge with `CC_CLOUD_URL`/`CC_CLOUD_TOKEN`, and put the Worker URL + token in `bridge.txt`. The bridge pushes state out and collects decisions; the Flipper long-polls the Worker. Details in `cloud/README.md`.
+
+**Option B, LAN + port-forward on WSL2.**
 WSL2 sits behind NAT, so the board (on the LAN) cannot reach the bridge until Windows forwards the port. Run once as Administrator:
 ```
 powershell -ExecutionPolicy Bypass -File \\wsl.localhost\Ubuntu\home\ersantana\Development\projects\flipper-cc-monitor\tools\setup-windows-portproxy.ps1

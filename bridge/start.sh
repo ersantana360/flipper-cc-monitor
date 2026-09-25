@@ -3,6 +3,8 @@
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="$HOME/.claude/cc-monitor"; mkdir -p "$LOGDIR"
+# Optional settings (CC_CLOUD_URL, CC_CLOUD_TOKEN, CC_USB_ALERTS, ...) live in ~/.claude/cc-monitor/env, KEY=VALUE per line.
+if [ -f "$LOGDIR/env" ]; then set -a; . "$LOGDIR/env"; set +a; fi
 if curl -s --max-time 1 localhost:8730/health >/dev/null 2>&1; then
   echo "bridge already running on :8730"; exit 0
 fi
